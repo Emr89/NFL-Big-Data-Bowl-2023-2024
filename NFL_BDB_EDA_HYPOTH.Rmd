@@ -1,0 +1,259 @@
+---
+title: "NFL_BDB_EDA_HYPOTH"
+author: "Eric Rupinski"
+date: "2024-01-06"
+output: word_document
+editor_options: 
+  chunk_output_type: console
+---
+```{r}
+#Load Libraries:
+library(here)
+library(ggplot2)
+library(gganimate)
+library(udpipe)
+library(randomForest)
+library(tidyverse)
+library(lme4)
+library(factoextra)
+library(moments)
+library(forecast)
+library(fastDummies)
+library(NeuralNetTools)
+library(caret)
+library(CAST)
+library(parallel)
+library(doMC)
+library(keras)
+
+#Multicore processing:
+numCores <- detectCores()
+registerDoMC(cores = numCores)
+
+#Load Data sets:
+  #Tracking Data by Week(1-9)
+W1 <- read.csv("/Users/emr/Desktop/NFL BDB 2024/Data/tracking_week_1.csv")
+W2 <- read.csv("/Users/emr/Desktop/NFL BDB 2024/Data/tracking_week_2.csv")
+W3 <- read.csv("/Users/emr/Desktop/NFL BDB 2024/Data/tracking_week_3.csv")
+W4 <- read.csv("/Users/emr/Desktop/NFL BDB 2024/Data/tracking_week_4.csv")
+W5 <- read.csv("/Users/emr/Desktop/NFL BDB 2024/Data/tracking_week_5.csv")
+W6 <- read.csv("/Users/emr/Desktop/NFL BDB 2024/Data/tracking_week_6.csv")
+W7 <- read.csv("/Users/emr/Desktop/NFL BDB 2024/Data/tracking_week_7.csv")
+W8 <- read.csv("/Users/emr/Desktop/NFL BDB 2024/Data/tracking_week_8.csv")
+W9 <- read.csv("/Users/emr/Desktop/NFL BDB 2024/Data/tracking_week_9.csv")
+
+  #Play Data set
+plays <- read.csv("/Users/emr/Desktop/NFL BDB 2024/Data/plays.csv")
+  #Player Information Data set
+players <- read.csv("/Users/emr/Desktop/NFL BDB 2024/Data/players.csv")
+  #Games Data set
+games <- read.csv("/Users/emr/Desktop/NFL BDB 2024/Data/games.csv")
+  #Tackles Data set 
+tackles<- read.csv("/Users/emr/Desktop/NFL BDB 2024/Data/tackles.csv")
+
+#Merging Tracking data weeks into 1 data set:
+Tracking_Data <- do.call("rbind", list(W1,W2,W3,W4,W5,W6,W7,W8,W9))
+```
+
+```{r}
+#Individual Data set Inspection: (For Later Analysis)
+
+#Tracking Data
+summary(Tracking_Data)
+  #Creating Unique Play # (UPN)
+Tracking_Data_Sum <- Tracking_Data %>% mutate(., UPN = unique_identifier(., fields = c("gameId","playId")))
+  #Summarizing to find UPN
+summary(Tracking_Data_Sum)
+
+  #Variable Types 
+    #gameId, playId,nflId,frameId,jerseyNumber,x,y,s,a,dis,o,dir = Numeric variables
+    #time, displayName, club, playDirection, event = character variable 
+      #Will need to Onehot encode "playDirection"
+       #Will need to convert time to numeric value 
+
+  #Summary Values
+    #Length of data set = 12187398 frames (1,218,739.8 seconds!)
+   #gameId,playId,nflId = summary values don't have meaning, identification variables
+   #frameId = Shortest play was 1 (.1 seconds) frame, longest play was 164 frames (16.4 seconds), unless there is a mistake. Mean value of play legnth was 25.5 frame lengths (~2.5 seconds)
+    #UPN (Unique Number of Plays through 9 week span) = 12,486 plays
+
+
+  #Checking for Missing Values 
+print(sapply(Tracking_Data_Sum, function(x) sum(is.na(x))))
+  # Variables with missing values = jerseyNumber, orientation, direction, event. But every variables except for event has the same number of missing values
+
+#Testing to see if the missing values are related to the football tracking
+Tracking_Data_WO_Football <- Tracking_Data %>% filter(., displayName != "football")
+print(sapply(Tracking_Data_WO_Football, function(x) sum(is.na(x))))
+  #Result = confirmed, the missing values were related to the football tracking (with the exception of events)
+  #Missing values in "event" = context shows that missing values are moments of the play that did not have a noteworthy event occur yet (middle of the play)
+
+
+## Player Data
+print(summary(players))
+  #nflId = relational key to use later
+  #variables to be used later = height, weight, both numeric. 
+print(sapply(players, function(x) sum(is.na(x))))
+  #Only variable w/ missing values = birthDate, but will not be examined in analysis, so can disregard. Height & Weight = NO missing values. 
+
+##Play Data
+print(summary(plays))
+  #Game_Id & Play_Id = relational keys later
+  # Character Variables = ballCarrierDisplayName, playDescription,possessionTeam,defensiveTeam,yardlineSide,GameClock,passResult,playnullifiedbyPenalty,offenseFormation,foulname1,foulname2,foulNFLId1,fouldNFLId2
+  # Will need to possibly convert gameclock to numeric
+  # Many of variables listed will be useful to subset the data, but will not be needed for analysis except for offseFormation & passResult
+print(sapply(plays, function(x) sum(is.na(x))))
+  #variables with missing values = yardlineSide, passlength, pentaltyYards,offenseFormation defendersinthebox, passprobability, expectedpointsAdded, Foulname1, Foulname2,FounNFLId1,FoulNFLId2.
+
+  #Context for missing values
+  #yardlineSide
+    #Filtering to only NA values to find patter
+p1 <- plays%>% filter(if_any(yardlineSide, is.na))
+summary(p1)
+  #Result = the value is missing only when the ball is placed at the 50 yardline, & therefore is exactly in the middle. 
+
+  #PassLength
+p2 <- plays%>% filter(if_any(passLength, is.na))
+summary(p2)
+  #occurs when passResult is empty or is labeled R, which means when the ball is rushed on purpose, or was a QB scramble (so not a passing play)
+
+  #Foulname1, Foulname2, FoulNFLID1,FoulNFLId2, PenaltyYards = missing values when no foul occur for the labeled foul variables with "1" and 2 fouls did not occur with variables "2" label. 
+
+  #PassProbability
+p3 <- plays%>% filter(if_any(passProbability, is.na))
+summary(p3)
+  #Result = all plays were nullified by penalty, which impacts the next, will be filted out for analysis
+  #Offensive Formation
+p4 <- plays%>% filter(if_any(offenseFormation, is.na))
+view(p4)
+  #All plays were considered "no plays", will be filtered out for analysis
+  
+#defenders in the box
+p5 <- plays%>% filter(if_any(defendersInTheBox, is.na))
+view(p5)
+  #Result = 4/5 were "No Plays", 1/5 was a saftey. Will be filtered out during analysis. 
+
+
+#Tackling Data set
+print(summary(tackles))
+  #All numeric variables
+  #GameId, PlayId, NFlId, are all relational keys to use later
+    #variable of interest = tackle,assist,forcedFumble,pff_missedTackle
+print(sapply(tackles, function(x) sum(is.na(x))))
+  #No missing values in this data set. 
+
+#games Dataset = Will not be needed for analysis. 
+```
+
+
+```{r}
+###Data Set Creation:
+  ##Tackle Data Set:
+#Mergining data sets by relational key variables
+Tackle_Prob_DS<- W1 %>% left_join(players, by="nflId") %>% left_join(plays, by = c("gameId","playId")) %>% left_join(tackles, by = c("gameId","playId","nflId")) %>% 
+  
+#Filter plays to eliminate plays with penalties
+filter(.,!complete.cases(penaltyYards)) %>% 
+  
+#Eliminating Variables of non-interest
+select(., -birthDate, -collegeName, -displayName.y,-yardlineSide,-(gameClock:preSnapVisitorScore),-(penaltyYards:prePenaltyPlayResult),-playNullifiedByPenalty,-(preSnapHomeTeamWinProbability:foulNFLId2)) %>%
+  
+# Creating Binary Variable to identify if data row is the Ball Carrier on the play 
+  mutate(., Is_Ball_Car = if_else(nflId==ballCarrierId,1,0)) %>%
+  
+  #Group by Gameid,playId,& frameId
+group_by(.,gameId,playId,frameId) %>%
+#Arrange Ball Carrier to first row of each unique frameId for Each unique gameId & playId
+arrange(., desc(Is_Ball_Car)) %>% 
+#Creating Variable if Team is Home Team (Can also use as Binary Variable if player is on the same team as ball carrier)
+mutate(., IsOffense = if_else(club==possessionTeam,1,0)) %>%
+  #Creating Variable if Team is Away Team
+mutate(., IsDefense = if_else(club==defensiveTeam,1,0)) %>%
+  #Create Euclidean Distances for each player from the ball carrier for matching frameId locations (ball carrier is always first row when grouped by variables above)
+mutate(Euclidean = as.matrix(dist(cbind(x, y)))[1, ]) %>%
+  
+  #Creating Tackle Range using speed and average arm span range of 70cm converted into yards = 0.765529 (Only calculating for Defense)
+  mutate(TackleRange = if_else(IsDefense==1,(s*0.1)+0.765529,0))%>% 
+  
+  # Creating Binary Variable if player is in Tackle Range compared to their location from the ball carrier
+  mutate(In_TackleRange = if_else(TackleRange > Euclidean,1,0)) %>% 
+  
+  #Regrouping the the data to separate variable creation by Offense & Defense for each unique Game&Play&Frame
+  ungroup() %>% group_by(gameId,playId,frameId,IsDefense) %>% 
+  
+  #Creating Variable to represent # of defenders in Tackle Range at specific given frame
+  mutate(Def_Tackle_Range = sum(In_TackleRange))
+  
+  
+
+
+#Creating 3 Separate Data Sets
+  #QB Data Set
+
+
+QB_Extra <- Tackle_Prob_DS %>% filter(., passResult =="R" ) %>% group_by(gameId,playId,frameId) %>% filter(., position =="QB")%>% mutate(QbLow= x-0.5) %>% mutate(QbHigh = x+0.5) %>% select(., gameId,playId,frameId,QbLow,QbHigh)
+
+
+QB_Ball_Range <- Tackle_Prob_DS %>% filter(., passResult =="R" ) %>% group_by(gameId,playId,frameId) %>% left_join(QB_Extra,join_by("gameId","playId","frameId")) %>%
+mutate(QbPos = if_else(x >= QbLow & x <= QbHigh,T,F)) %>% filter(.,displayName.x =="football") %>% select(., gameId,playId,frameId,QbPos)
+
+
+QB_Tackle_Prob <- Tackle_Prob_DS %>% filter(., passResult =="R" )%>% group_by(gameId,playId,frameId) %>% left_join(QB_Ball_Range, join_by("gameId","playId","frameId")) %>% filter(., QbPos==T) %>% select(., -time,-jerseyNumber,-club,-ballCarrierId,-ballCarrierDisplayName,-playDescription,-possessionTeam,-defensiveTeam,-yardlineNumber,-passResult,-passLength,-QbPos) %>% replace_na(list(event="NA")) %>% mutate(Tackle_ADJ = if_else(event %in% c("fumble","out_of_bounds","qb_slide","tackle"),"TKL",NA)) %>% select(.,-event,-height)
+
+
+# WR
+WR_Extra <- Tackle_Prob_DS %>% filter(., passResult =="C" ) %>% group_by(gameId,playId,frameId) %>% filter(., Is_Ball_Car==1)%>% mutate(WRLow= x-0.5) %>% mutate(WRHigh = x+0.5) %>% select(., gameId,playId,frameId,WRLow,WRHigh)
+
+
+WR_Ball_Range <- Tackle_Prob_DS %>% filter(., passResult =="C" ) %>% group_by(gameId,playId,frameId) %>% left_join(WR_Extra,join_by("gameId","playId","frameId")) %>% group_by(gameId,playId,nflId) %>% filter(cumany(event=="pass_outcome_caught")) %>%  replace_na(list(event="NA"))%>% select(., -time,-jerseyNumber,-club,-ballCarrierId,-ballCarrierDisplayName,-playDescription,-possessionTeam,-defensiveTeam,-yardlineNumber,-passResult,-passLength,-WRLow,-WRHigh)
+
+
+RB_Ball_Range <- Tackle_Prob_DS %>% mutate(Run=ifelse(passResult %in% c("R","C"),"NR","R")) %>% filter(., Run=="R") %>%  
+  
+group_by(gameId,playId,nflId) %>% 
+  
+  filter(cumany(event=="handoff")) %>%  
+  
+  #replace_na(list(event="NA"))%>% 
+  select(., -time,-jerseyNumber,-club,-ballCarrierId,-ballCarrierDisplayName,-playDescription,-possessionTeam,-defensiveTeam,-yardlineNumber,-passResult,-passLength,-Run)
+
+
+
+
+#S1<- Tackle_Prob_DS[sample(nrow(Tackle_Prob_DS), 20000, replace = FALSE, prob = NULL),]
+#view(S1)
+
+S2 <- Tackle_Prob_DS %>% filter(., gameId==2022090800)
+view(S2)
+
+S3 <- RB_Ball_Range %>% filter(., gameId==2022090800)
+view(S3)
+```
+
+```{r}
+#Creating Yardage prediction Data sets 
+
+#QB
+QB_Tackle_Prob_2 <- Tackle_Prob_DS %>% filter(., passResult =="R" ) %>% filter(., event=="run") %>% select(., -time,-jerseyNumber,-club,-ballCarrierId,-ballCarrierDisplayName,-playDescription,-possessionTeam,-defensiveTeam,-yardlineNumber,-passResult,-passLength)
+
+#RB
+
+RB_Yard_DS <- RB_Ball_Range %>% filter(., event=="handoff")
+
+#WR 
+WR_Yard_DS <- WR_Ball_Range %>% filter(., event=="pass_outcome_caught")
+```
+
+
+
+```{r}
+#For Regression always leave out displayname, playdirection
+
+#QB
+
+data_list_norm <- lapply(QB_Tackle_Prob, function(data) {
+  scale(data[, c("x","y", "dir", "s", "a", "o","dis","Is_Ball_Car","IsOffense","IsDefense","Euclidean","TackleRange","Def_Tackle_Range")])
+})
+
+```
+
