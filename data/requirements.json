@@ -1,0 +1,24 @@
+{
+  "input_files_detected": [],
+  "complete_manifest": false,
+  "note": "Static extraction of literal reads; dynamic files and schemas require source recovery. Do not redistribute restricted data.",
+  "r_packages_detected": [
+    "CAST",
+    "NeuralNetTools",
+    "caret",
+    "doMC",
+    "factoextra",
+    "fastDummies",
+    "forecast",
+    "gganimate",
+    "ggplot2",
+    "here",
+    "keras",
+    "lme4",
+    "moments",
+    "parallel",
+    "randomForest",
+    "tidyverse",
+    "udpipe"
+  ]
+}

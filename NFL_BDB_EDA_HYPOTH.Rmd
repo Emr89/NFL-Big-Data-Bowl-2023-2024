@@ -7,6 +7,11 @@ editor_options:
   chunk_output_type: console
 ---
 ```{r}
+# Input contract: competition files remain local and must be obtained with authorization.
+data_dir <- Sys.getenv("BDB_DATA_DIR", "data/raw")
+required <- c(paste0("tracking_week_",1:9,".csv"),"plays.csv","players.csv","games.csv","tackles.csv")
+missing <- required[!file.exists(file.path(data_dir,required))]
+if(length(missing)) stop(paste("Missing BDB input files:",paste(missing,collapse=", ")))
 #Load Libraries:
 library(here)
 library(ggplot2)
@@ -32,24 +37,24 @@ registerDoMC(cores = numCores)
 
 #Load Data sets:
   #Tracking Data by Week(1-9)
-W1 <- read.csv("/Users/emr/Desktop/NFL BDB 2024/Data/tracking_week_1.csv")
-W2 <- read.csv("/Users/emr/Desktop/NFL BDB 2024/Data/tracking_week_2.csv")
-W3 <- read.csv("/Users/emr/Desktop/NFL BDB 2024/Data/tracking_week_3.csv")
-W4 <- read.csv("/Users/emr/Desktop/NFL BDB 2024/Data/tracking_week_4.csv")
-W5 <- read.csv("/Users/emr/Desktop/NFL BDB 2024/Data/tracking_week_5.csv")
-W6 <- read.csv("/Users/emr/Desktop/NFL BDB 2024/Data/tracking_week_6.csv")
-W7 <- read.csv("/Users/emr/Desktop/NFL BDB 2024/Data/tracking_week_7.csv")
-W8 <- read.csv("/Users/emr/Desktop/NFL BDB 2024/Data/tracking_week_8.csv")
-W9 <- read.csv("/Users/emr/Desktop/NFL BDB 2024/Data/tracking_week_9.csv")
+W1 <- read.csv(file.path(data_dir,"tracking_week_1.csv"))
+W2 <- read.csv(file.path(data_dir,"tracking_week_2.csv"))
+W3 <- read.csv(file.path(data_dir,"tracking_week_3.csv"))
+W4 <- read.csv(file.path(data_dir,"tracking_week_4.csv"))
+W5 <- read.csv(file.path(data_dir,"tracking_week_5.csv"))
+W6 <- read.csv(file.path(data_dir,"tracking_week_6.csv"))
+W7 <- read.csv(file.path(data_dir,"tracking_week_7.csv"))
+W8 <- read.csv(file.path(data_dir,"tracking_week_8.csv"))
+W9 <- read.csv(file.path(data_dir,"tracking_week_9.csv"))
 
   #Play Data set
-plays <- read.csv("/Users/emr/Desktop/NFL BDB 2024/Data/plays.csv")
+plays <- read.csv(file.path(data_dir,"plays.csv"))
   #Player Information Data set
-players <- read.csv("/Users/emr/Desktop/NFL BDB 2024/Data/players.csv")
+players <- read.csv(file.path(data_dir,"players.csv"))
   #Games Data set
-games <- read.csv("/Users/emr/Desktop/NFL BDB 2024/Data/games.csv")
+games <- read.csv(file.path(data_dir,"games.csv"))
   #Tackles Data set 
-tackles<- read.csv("/Users/emr/Desktop/NFL BDB 2024/Data/tackles.csv")
+tackles<- read.csv(file.path(data_dir,"tackles.csv"))
 
 #Merging Tracking data weeks into 1 data set:
 Tracking_Data <- do.call("rbind", list(W1,W2,W3,W4,W5,W6,W7,W8,W9))
@@ -72,7 +77,7 @@ summary(Tracking_Data_Sum)
        #Will need to convert time to numeric value 
 
   #Summary Values
-    #Length of data set = 12187398 frames (1,218,739.8 seconds!)
+    #Length of data set = 12,187,398 player/football tracking rows; rows are not distinct frames or elapsed seconds
    #gameId,playId,nflId = summary values don't have meaning, identification variables
    #frameId = Shortest play was 1 (.1 seconds) frame, longest play was 164 frames (16.4 seconds), unless there is a mistake. Mean value of play legnth was 25.5 frame lengths (~2.5 seconds)
     #UPN (Unique Number of Plays through 9 week span) = 12,486 plays
@@ -150,6 +155,7 @@ print(sapply(tackles, function(x) sum(is.na(x))))
 ###Data Set Creation:
   ##Tackle Data Set:
 #Mergining data sets by relational key variables
+# The exploratory feature set below is Week 1 only; no fitted probability model.
 Tackle_Prob_DS<- W1 %>% left_join(players, by="nflId") %>% left_join(plays, by = c("gameId","playId")) %>% left_join(tackles, by = c("gameId","playId","nflId")) %>% 
   
 #Filter plays to eliminate plays with penalties
